@@ -92,9 +92,61 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
+    # Step 1: Initialize session
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: Parse query — extract description, size, max_price with regex
+    import re
+
+    price_match = re.search(r"(?:under|below|max|up to)\s*\$?(\d+(?:\.\d+)?)", query, re.IGNORECASE)
+    max_price = float(price_match.group(1)) if price_match else None
+
+    size_match = re.search(
+        r"\bsize\s+([A-Z0-9/]+)\b|(?:^|[\s,])([XS|S|M|L|XL|XXL|W\d{2}]+)(?:$|[\s,])",
+        query,
+        re.IGNORECASE,
+    )
+    size = None
+    if size_match:
+        size = (size_match.group(1) or size_match.group(2)).upper()
+
+    description = re.sub(
+        r"(under|below|max|up to)\s*\$?\d+(?:\.\d+)?", "", query, flags=re.IGNORECASE
+    )
+    description = re.sub(r"\bsize\s+\S+", "", description, flags=re.IGNORECASE)
+    description = re.sub(r"\b(looking for|i want|find me|i need)\b", "", description, flags=re.IGNORECASE)
+    description = description.strip(" ,.")
+
+    session["parsed"] = {"description": description, "size": size, "max_price": max_price}
+
+    # Step 3: Call search_listings — branch on results
+    results = search_listings(description, size=size, max_price=max_price)
+    session["search_results"] = results
+
+    if not results:
+        size_hint = f" in size {size}" if size else ""
+        price_hint = f" under ${int(max_price)}" if max_price else ""
+        session["error"] = (
+            f"No listings found for '{description}'{size_hint}{price_hint}. "
+            f"Try broadening your search: remove the size filter, increase your budget, "
+            f"or search for a different style."
+        )
+        return session
+
+    # Step 4: Select top result
+    session["selected_item"] = results[0]
+
+    # Step 5: Call suggest_outfit — always continues even if wardrobe is empty
+    session["outfit_suggestion"] = suggest_outfit(
+        session["selected_item"], session["wardrobe"]
+    )
+
+    # Step 6: Call create_fit_card — always returns a caption
+    session["fit_card"] = create_fit_card(
+        session["outfit_suggestion"], session["selected_item"]
+    )
+
+    # Step 7: Return completed session
     return session
 
 
