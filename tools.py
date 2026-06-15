@@ -180,7 +180,7 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        max_tokens=300,
+        max_tokens=600,
         messages=[{"role": "user", "content": prompt}]
     )
 
