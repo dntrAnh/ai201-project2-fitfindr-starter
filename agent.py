@@ -18,7 +18,9 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
-from tools import search_listings, suggest_outfit, create_fit_card
+import re
+
+from tools import search_listings, suggest_outfit, create_fit_card, assess_price
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -30,8 +32,6 @@ def _new_session(query: str, wardrobe: dict) -> dict:
     The session dict is the single source of truth for everything that happens
     during a run — it stores the original query, parsed parameters, tool results,
     and any error that caused early termination.
-
-    You may add fields to this dict as needed for your implementation.
     """
     return {
         "query": query,              # original user query
@@ -41,8 +41,33 @@ def _new_session(query: str, wardrobe: dict) -> dict:
         "wardrobe": wardrobe,        # user's wardrobe dict
         "outfit_suggestion": None,   # string returned by suggest_outfit
         "fit_card": None,            # string returned by create_fit_card
+        "price_assessment": None,    # string returned by assess_price (stretch)
+        "retry_note": None,          # set when auto-retry loosened constraints
         "error": None,               # set if the interaction ended early
     }
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_query(query: str) -> tuple[str, str | None, float | None]:
+    """Parse a natural language query into (description, size, max_price)."""
+    price_match = re.search(
+        r"(?:under|below|max|up to)\s*\$?(\d+(?:\.\d+)?)", query, re.IGNORECASE
+    )
+    max_price = float(price_match.group(1)) if price_match else None
+
+    size_match = re.search(r"\bsize\s+([A-Z0-9/]+)\b", query, re.IGNORECASE)
+    size = size_match.group(1).upper() if size_match else None
+
+    description = re.sub(
+        r"(under|below|max|up to)\s*\$?\d+(?:\.\d+)?", "", query, flags=re.IGNORECASE
+    )
+    description = re.sub(r"\bsize\s+\S+", "", description, flags=re.IGNORECASE)
+    description = re.sub(
+        r"\b(looking for|i want|find me|i need)\b", "", description, flags=re.IGNORECASE
+    )
+    description = description.strip(" ,.")
+    return description, size, max_price
 
 
 # ── planning loop ─────────────────────────────────────────────────────────────
@@ -62,65 +87,44 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         The session dict after the interaction completes. Check session["error"]
         first — if it is not None, the interaction ended early and the other
         output fields (outfit_suggestion, fit_card) will be None.
-
-    TODO — implement this function using the planning loop you designed in planning.md:
-
-        Step 1: Initialize the session with _new_session().
-
-        Step 2: Parse the user's query to extract a description, size, and
-                max_price. You can use regex, string splitting, or ask the LLM
-                to parse it — document your choice in planning.md.
-                Store the result in session["parsed"].
-
-        Step 3: Call search_listings() with the parsed parameters.
-                Store results in session["search_results"].
-                If no results: set session["error"] to a helpful message and
-                return the session early. Do NOT proceed to suggest_outfit
-                with empty input.
-
-        Step 4: Select the item to use (e.g., the top result).
-                Store it in session["selected_item"].
-
-        Step 5: Call suggest_outfit() with the selected item and wardrobe.
-                Store the result in session["outfit_suggestion"].
-
-        Step 6: Call create_fit_card() with the outfit suggestion and selected item.
-                Store the result in session["fit_card"].
-
-        Step 7: Return the session.
-
-    Before writing code, complete the Planning Loop and State Management sections
-    of planning.md — your implementation should match what you described there.
     """
     # Step 1: Initialize session
     session = _new_session(query, wardrobe)
 
-    # Step 2: Parse query — extract description, size, max_price with regex
-    import re
-
-    price_match = re.search(r"(?:under|below|max|up to)\s*\$?(\d+(?:\.\d+)?)", query, re.IGNORECASE)
-    max_price = float(price_match.group(1)) if price_match else None
-
-    size_match = re.search(
-        r"\bsize\s+([A-Z0-9/]+)\b|(?:^|[\s,])([XS|S|M|L|XL|XXL|W\d{2}]+)(?:$|[\s,])",
-        query,
-        re.IGNORECASE,
-    )
-    size = None
-    if size_match:
-        size = (size_match.group(1) or size_match.group(2)).upper()
-
-    description = re.sub(
-        r"(under|below|max|up to)\s*\$?\d+(?:\.\d+)?", "", query, flags=re.IGNORECASE
-    )
-    description = re.sub(r"\bsize\s+\S+", "", description, flags=re.IGNORECASE)
-    description = re.sub(r"\b(looking for|i want|find me|i need)\b", "", description, flags=re.IGNORECASE)
-    description = description.strip(" ,.")
-
+    # Step 2: Parse query
+    description, size, max_price = _parse_query(query)
     session["parsed"] = {"description": description, "size": size, "max_price": max_price}
 
-    # Step 3: Call search_listings — branch on results
+    # Step 3: Call search_listings, auto-retry with loosened constraints on empty
     results = search_listings(description, size=size, max_price=max_price)
+
+    if not results and size is not None:
+        results = search_listings(description, size=None, max_price=max_price)
+        if results:
+            session["retry_note"] = (
+                f"No results for size {size} — showing results for any size instead."
+            )
+            size = None
+
+    if not results and max_price is not None:
+        loosened = round(max_price * 1.5)
+        results = search_listings(description, size=size, max_price=loosened)
+        if results:
+            session["retry_note"] = (
+                f"No results under ${int(max_price)} — "
+                f"showing results up to ${loosened} instead."
+            )
+            max_price = float(loosened)
+
+    if not results:
+        first_keyword = description.split()[0] if description.split() else description
+        results = search_listings(first_keyword, size=None, max_price=None)
+        if results:
+            session["retry_note"] = (
+                f"No exact matches — showing results for '{first_keyword}' "
+                f"with all filters removed."
+            )
+
     session["search_results"] = results
 
     if not results:
@@ -128,20 +132,23 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         price_hint = f" under ${int(max_price)}" if max_price else ""
         session["error"] = (
             f"No listings found for '{description}'{size_hint}{price_hint}. "
-            f"Try broadening your search: remove the size filter, increase your budget, "
-            f"or search for a different style."
+            f"Try broadening your search: remove the size filter, increase your "
+            f"budget, or search for a different style."
         )
         return session
 
     # Step 4: Select top result
     session["selected_item"] = results[0]
 
-    # Step 5: Call suggest_outfit — always continues even if wardrobe is empty
+    # Step 4b: Assess price (stretch)
+    session["price_assessment"] = assess_price(session["selected_item"])
+
+    # Step 5: Suggest outfit (trend-aware)
     session["outfit_suggestion"] = suggest_outfit(
         session["selected_item"], session["wardrobe"]
     )
 
-    # Step 6: Call create_fit_card — always returns a caption
+    # Step 6: Create fit card
     session["fit_card"] = create_fit_card(
         session["outfit_suggestion"], session["selected_item"]
     )
@@ -153,7 +160,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 # ── CLI test ──────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
+    from utils.data_loader import get_example_wardrobe
 
     print("=== Happy path: graphic tee ===\n")
     session = run_agent(
@@ -163,13 +170,27 @@ if __name__ == "__main__":
     if session["error"]:
         print(f"Error: {session['error']}")
     else:
-        print(f"Found: {session['selected_item']['title']}")
+        print(f"Found:            {session['selected_item']['title']}")
+        print(f"Price assessment: {session['price_assessment']}")
+        print(f"Retry note:       {session['retry_note']}")
         print(f"\nOutfit: {session['outfit_suggestion']}")
         print(f"\nFit card: {session['fit_card']}")
 
-    print("\n\n=== No-results path ===\n")
+    print("\n\n=== No-results path (impossible query) ===\n")
     session2 = run_agent(
         query="designer ballgown size XXS under $5",
         wardrobe=get_example_wardrobe(),
     )
     print(f"Error message: {session2['error']}")
+    print(f"fit_card is None: {session2['fit_card'] is None}")
+
+    print("\n\n=== Auto-retry path (tight price, has size) ===\n")
+    session3 = run_agent(
+        query="vintage jacket size S under $10",
+        wardrobe=get_example_wardrobe(),
+    )
+    if session3["error"]:
+        print(f"Error: {session3['error']}")
+    else:
+        print(f"Found:      {session3['selected_item']['title']}")
+        print(f"Retry note: {session3['retry_note']}")

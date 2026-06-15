@@ -10,9 +10,14 @@ Tools:
     search_listings(description, size, max_price)  → list[dict]
     suggest_outfit(new_item, wardrobe)              → str
     create_fit_card(outfit, new_item)               → str
+
+Stretch tools:
+    assess_price(item)                             → str
+    get_trending_styles(top_n)                     → list[str]
 """
 
 import os
+from collections import Counter
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -129,6 +134,10 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
     item_tags = ", ".join(new_item.get("style_tags", []))
     item_category = new_item.get("category", "piece")
 
+    # Inject trending styles so the LLM can lean into relevant ones
+    trending = get_trending_styles()
+    trend_note = f"Currently trending styles: {', '.join(trending)}. Lean into whichever apply to this item."
+
     wardrobe_items = wardrobe.get("items", [])
 
     if not wardrobe_items:
@@ -138,6 +147,8 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
         Category: {item_category}
         Colors: {item_colors}
         Style: {item_tags}
+
+        {trend_note}
 
         They don't have their wardrobe details yet. Suggest 2-3 general outfit ideas for this item.
         Be specific about what types of pieces would pair well (e.g., "dark jeans", "white sneakers", "leather jacket").
@@ -155,6 +166,8 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
         Category: {item_category}
         Colors: {item_colors}
         Style: {item_tags}
+
+        {trend_note}
 
         Here's their existing wardrobe:
         {wardrobe_list}
@@ -249,3 +262,83 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
     )
 
     return response.choices[0].message.content
+
+
+# ── Stretch tool: get_trending_styles ─────────────────────────────────────────
+
+def get_trending_styles(top_n: int = 5) -> list[str]:
+    """
+    Return the top N trending style tags by frequency across all listings.
+
+    Data source: style_tag counts from data/listings.json — no external API.
+
+    Args:
+        top_n: Number of top tags to return (default 5).
+
+    Returns:
+        List of style tag strings, most frequent first.
+    """
+    listings = load_listings()
+    all_tags = [tag for listing in listings for tag in listing.get("style_tags", [])]
+    return [tag for tag, _ in Counter(all_tags).most_common(top_n)]
+
+
+# ── Stretch tool: assess_price ────────────────────────────────────────────────
+
+def assess_price(item: dict) -> str:
+    """
+    Compare the listing's price against comparable listings in the dataset.
+
+    Comparables are listings in the same category that share at least one
+    style tag. Falls back to all same-category listings if no overlap exists.
+
+    Args:
+        item: A listing dict from search_listings().
+
+    Returns:
+        A plain-text price assessment string with label, range, average,
+        and percentile. Never raises — returns a fallback string if the
+        comparable set is empty.
+    """
+    listings = load_listings()
+    category = item.get("category", "")
+    item_tags = set(item.get("style_tags", []))
+    item_price = item.get("price", 0)
+
+    # Prefer same category + at least 1 shared style tag
+    comparables = [
+        l for l in listings
+        if l["id"] != item["id"]
+        and l["category"] == category
+        and set(l.get("style_tags", [])) & item_tags
+    ]
+
+    # Fall back to same category only
+    if not comparables:
+        comparables = [
+            l for l in listings
+            if l["id"] != item["id"] and l["category"] == category
+        ]
+
+    if not comparables:
+        return f"${item_price:.0f} — not enough comparable listings to assess."
+
+    prices = [l["price"] for l in comparables]
+    avg = sum(prices) / len(prices)
+    # % of comparables that cost MORE than this item
+    pct_cheaper = int(sum(1 for p in prices if p > item_price) / len(prices) * 100)
+
+    if pct_cheaper >= 70:
+        label = "great deal 🟢"
+    elif pct_cheaper >= 40:
+        label = "fair price 🟡"
+    else:
+        label = "on the higher end 🔴"
+
+    return (
+        f"${item_price:.0f} — {label}\n"
+        f"Compared to {len(comparables)} similar {category} listings:\n"
+        f"  Range:   ${min(prices):.0f} – ${max(prices):.0f}\n"
+        f"  Average: ${avg:.0f}\n"
+        f"  Better priced than {pct_cheaper}% of comparable listings."
+    )

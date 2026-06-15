@@ -64,7 +64,10 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
     # Step 5: Format selected_item into readable listing_text
     item = session["selected_item"]
     brand_line = f"Brand:     {item['brand']}\n" if item["brand"] else ""
+    retry_header = f"⚠️  {session['retry_note']}\n\n" if session.get("retry_note") else ""
+    price_block = f"\n\n── Price Assessment ──\n{session['price_assessment']}" if session.get("price_assessment") else ""
     listing_text = (
+        f"{retry_header}"
         f"{item['title']}\n"
         f"{'─' * 40}\n"
         f"Price:     ${item['price']}\n"
@@ -75,6 +78,7 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
         f"{brand_line}"
         f"Style:     {', '.join(item['style_tags'])}\n\n"
         f"{item['description']}"
+        f"{price_block}"
     )
 
     return listing_text, session["outfit_suggestion"], session["fit_card"]
