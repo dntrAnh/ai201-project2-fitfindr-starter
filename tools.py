@@ -140,48 +140,37 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     wardrobe_items = wardrobe.get("items", [])
 
+    system_msg = "You are a fashion stylist who gives short, direct outfit advice. No greetings, no intros, no closing summaries. Only output the two outfits in the requested format."
+
     if not wardrobe_items:
-        prompt = f"""You are a fashion stylist. A user is considering buying this thrifted item:
-
-        Title: {item_title}
-        Category: {item_category}
-        Colors: {item_colors}
-        Style: {item_tags}
-
-        {trend_note}
-
-        They don't have their wardrobe details yet. Suggest 2-3 general outfit ideas for this item.
-        Be specific about what types of pieces would pair well (e.g., "dark jeans", "white sneakers", "leather jacket").
-        Include one concrete styling tip (e.g., "roll the sleeves" or "tuck it in").
-        Keep it casual and authentic, as if giving advice to a friend."""
+        user_msg = (
+            f"Item: {item_title} | Colors: {item_colors} | Style: {item_tags}\n"
+            f"Trending: {', '.join(trending)}\n\n"
+            f"Give 2 outfit ideas. Format:\n"
+            f"**Outfit 1: [name]** — [pieces] + [one styling tip]\n"
+            f"**Outfit 2: [name]** — [pieces] + [one styling tip]"
+        )
     else:
         wardrobe_list = "\n".join(
-            f"- {item['name']} ({item['category']}) — colors: {', '.join(item['colors'])}, style: {', '.join(item['style_tags'])}"
+            f"- {item['name']} ({item['category']})"
             for item in wardrobe_items
         )
-
-        prompt = f"""You are a fashion stylist. A user is considering buying this thrifted item:
-
-        Title: {item_title}
-        Category: {item_category}
-        Colors: {item_colors}
-        Style: {item_tags}
-
-        {trend_note}
-
-        Here's their existing wardrobe:
-        {wardrobe_list}
-
-        Suggest 1-2 complete outfits using the new item with specific pieces from their wardrobe.
-        Name the exact pieces by their names.
-        Explain why these pieces complement the new item (color, style, silhouette).
-        Include one concrete styling tip (e.g., "tuck the front corner" or "roll the sleeves").
-        Keep it casual and authentic."""
+        user_msg = (
+            f"Item: {item_title} | Colors: {item_colors} | Style: {item_tags}\n"
+            f"Trending: {', '.join(trending)}\n\n"
+            f"Wardrobe:\n{wardrobe_list}\n\n"
+            f"Give 2 outfits using exact wardrobe piece names. Format:\n"
+            f"**Outfit 1: [name]** — [pieces] + [one styling tip]\n"
+            f"**Outfit 2: [name]** — [pieces] + [one styling tip]"
+        )
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        max_tokens=600,
-        messages=[{"role": "user", "content": prompt}]
+        max_tokens=250,
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ]
     )
 
     return response.choices[0].message.content
