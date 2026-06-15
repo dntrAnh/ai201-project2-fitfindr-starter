@@ -12,6 +12,8 @@ Then open the localhost URL shown in your terminal (usually http://localhost:786
 but check your terminal — the port may differ).
 """
 
+import urllib.parse
+
 import gradio as gr
 
 from agent import run_agent
@@ -66,12 +68,24 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
     brand_line = f"Brand:     {item['brand']}\n" if item["brand"] else ""
     retry_header = f"⚠️  {session['retry_note']}\n\n" if session.get("retry_note") else ""
     price_block = f"\n\n── Price Assessment ──\n{session['price_assessment']}" if session.get("price_assessment") else ""
+
+    # Generate a search URL on the actual platform (listings are mock, so link to search)
+    query_encoded = urllib.parse.quote(item["title"])
+    platform_urls = {
+        "depop":   f"https://www.depop.com/search/?q={query_encoded}",
+        "thredUp": f"https://www.thredup.com/search#search_text={query_encoded}",
+        "poshmark": f"https://poshmark.com/search?query={query_encoded}",
+    }
+    search_url = platform_urls.get(item["platform"], "")
+    link_line = f"🔗 Search on {item['platform']}: {search_url}\n" if search_url else ""
+
     listing_text = (
         f"{retry_header}"
         f"{item['title']}\n"
         f"{'─' * 40}\n"
         f"Price:     ${item['price']}\n"
         f"Platform:  {item['platform']}\n"
+        f"{link_line}"
         f"Size:      {item['size']}\n"
         f"Condition: {item['condition']}\n"
         f"Colors:    {', '.join(item['colors'])}\n"
@@ -121,17 +135,17 @@ Describe what you're looking for — include size and price if you want to filte
         with gr.Row():
             listing_output = gr.Textbox(
                 label="🛍️ Top listing found",
-                lines=8,
+                lines=16,
                 interactive=False,
             )
             outfit_output = gr.Textbox(
                 label="👗 Outfit idea",
-                lines=8,
+                lines=16,
                 interactive=False,
             )
             fitcard_output = gr.Textbox(
                 label="✨ Your fit card",
-                lines=8,
+                lines=16,
                 interactive=False,
             )
 
